@@ -1,0 +1,15 @@
+{
+  "type": "workflow",
+  "name": "modly_example_workflow",
+  "nodes": {
+    "1": {
+      "class_type": "LoadImage",
+      "inputs": { "image": "input.png" }
+    },
+    "2": {
+      "class_type": "TextTo3D",
+      "inputs": { "image": { "node_id": "1", "output": "image" }, "prompt": "A stylized statue" }
+    }
+  },
+  "outputs": { "mesh": { "node_id": "2", "output": "mesh_file" } }
+}

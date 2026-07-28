@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
 """
 generator.py
-Updated to accept text prompts, image prompts, and an optional existing 3D file to edit.
-It will attempt to produce a .blend file by invoking Blender's CLI if Blender is available.
-
-Behavior summary:
-- Inputs supported: input_image (path), text_prompt (string), existing_file (path), workflow_json (path)
-- Sends the workflow to a local ComfyUI instance (default COMFYUI_URL env var)
-- Polls for a queue/history result
-- Downloads mesh output (if available) into output_dir
-- If Blender CLI is available and an OBJ/GLTF is present, imports it and saves a .blend file
-
-Limitations:
-- Blender must be installed in the environment and reachable as 'blender' in PATH for .blend export.
-- ComfyUI output shapes differ between deployments — adapt the parsing of result_info accordingly.
+Fixed and hardened version:
+- Corrected inconsistent variable names (comfy_url vs comfyui_url vs comfyurl)
+- Improved payload building and safeguards
+- Added clearer logging and safer tmp file cleanup
+- Exports a Generator class for Modly
 """
 
 import os
@@ -31,11 +23,14 @@ MAX_WAIT_SECONDS = 600
 
 
 def _upload_file(comfy_url, path, field_name="image"):
-    """Upload a file to ComfyUI. Returns server response JSON if available."""
+    """Upload a file to ComfyUI. Returns server response JSON if available.
+
+    Uses the provided comfy_url; caller may pass COMFYUI_URL.
+    """
     print(f"[generator] Uploading {path} to ComfyUI at {comfy_url} ...")
     with open(path, "rb") as f:
         files = {field_name: (os.path.basename(path), f)}
-        resp = requests.post(f"{comfyui_url.rstrip('/')}/upload/image", files=files)
+        resp = requests.post(f"{comfy_url.rstrip('/')}/upload/image", files=files)
     resp.raise_for_status()
     try:
         return resp.json()
@@ -58,10 +53,13 @@ def _poll_for_result(comfy_url, queue_info, timeout_seconds=MAX_WAIT_SECONDS):
     print("[generator] Polling for completion ...")
     while time.time() - start < timeout_seconds:
         try:
-            qid = queue_info.get("id") or queue_info.get("prompt_id") or queue_info.get("queue_id")
+            qid = None
+            if isinstance(queue_info, dict):
+                qid = queue_info.get("id") or queue_info.get("prompt_id") or queue_info.get("queue_id")
+            # If we have a queue/prompt id, try to inspect that entry
             if qid:
                 try:
-                    resp = requests.get(f"{comfyurl.rstrip('/')}/queue/{qid}", timeout=10)
+                    resp = requests.get(f"{comfy_url.rstrip('/')}/queue/{qid}", timeout=10)
                     if resp.status_code == 200:
                         rj = resp.json()
                         if rj.get("status") in ("done", "completed", "complete") or rj.get("finished", False):
@@ -69,6 +67,7 @@ def _poll_for_result(comfy_url, queue_info, timeout_seconds=MAX_WAIT_SECONDS):
                 except Exception:
                     pass
 
+            # Fallback: inspect history
             try:
                 resp = requests.get(f"{comfy_url.rstrip('/')}/history", timeout=10)
                 if resp.status_code == 200:
@@ -110,14 +109,14 @@ def _download_file(url, dest_path):
 def _run_blender_import_save(input_mesh_path, output_blend_path):
     """Try to call Blender to import an OBJ/GLTF and save a .blend file.
     Returns True on success, False otherwise.
-   """
+    """
     blender_exec = shutil.which("blender")
     if not blender_exec:
         print("[generator] Blender executable not found in PATH; skipping .blend export.")
         return False
 
     # Create a small temporary Blender Python script to import and save the .blend
-    script = f"""
+    script = """
 import bpy
 import sys
 in_path = sys.argv[-2]
@@ -141,10 +140,14 @@ print('Saved .blend to', out_path)
     cmd = [blender_exec, "--background", "--python", str(tmp_script), "--", str(input_mesh_path), str(output_blend_path)]
     print(f"[generator] Running Blender: {' '.join(cmd)}")
     try:
-        proc = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
         print(proc.stdout)
-        print(proc.stderr, file=sys.stderr)
-        tmp_script.unlink(missing_ok=True)
+        if proc.stderr:
+            print(proc.stderr, file=sys.stderr)
+        try:
+            tmp_script.unlink()
+        except Exception:
+            pass
         return True
     except subprocess.CalledProcessError as e:
         print(f"[generator] Blender failed: {e}\nstdout={e.stdout}\nstderr={e.stderr}")
@@ -160,6 +163,13 @@ print('Saved .blend to', out_path)
 
 
 def generate(inputs, output_dir):
+    """Entry point called by Modly.
+
+    inputs: dict with keys from manifest (input_image, text_prompt, existing_file, workflow_json optional)
+    output_dir: path where to place the resulting mesh file
+
+    Returns a dict mapping manifest output names to filesystem paths.
+    """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     image_path = inputs.get("input_image")
     text_prompt = inputs.get("text_prompt")
@@ -175,40 +185,46 @@ def generate(inputs, output_dir):
     try:
         if image_path and os.path.exists(image_path):
             _upload_file(COMFYUI_URL, image_path, field_name="image")
-        if existing_file:
+        if existing_file and os.path.exists(existing_file):
             # Some ComfyUI setups might provide a file-upload for assets; reuse image endpoint
             _upload_file(COMFYUI_URL, existing_file, field_name="image")
     except Exception as e:
         print(f"[generator] Upload to ComfyUI failed: {e}")
 
     # Load workflow
+    workflow_payload = None
     if workflow_json_path and os.path.exists(workflow_json_path):
-        with open(workflow_json_path, "r", encoding="utf-8") as f:
-            workflow_payload = json.load(f)
-    else:
+        try:
+            with open(workflow_json_path, "r", encoding="utf-8") as f:
+                workflow_payload = json.load(f)
+        except Exception as e:
+            print(f"[generator] Failed to load workflow JSON: {e}")
+            workflow_payload = None
+
+    if not workflow_payload:
         # Build a generic placeholder payload that includes text_prompt and input filenames.
         # Replace this with your exported ComfyUI API JSON for a real pipeline.
-        payload_nodes = {
-            "1": {
+        payload_nodes = {}
+        if image_path:
+            payload_nodes["1"] = {
                 "class_type": "LoadImage",
-                "inputs": {"image": os.path.basename(image_path) if image_path else None}
+                "inputs": {"image": os.path.basename(image_path)}
             }
-        }
+        else:
+            payload_nodes["1"] = {"class_type": "EmptyInput"}
+
         workflow_payload = {
-            "prompt": {
-                "type": "workflow",
-                "name": "modly_placeholder_workflow",
-                "meta": {"text_prompt": text_prompt, "existing_file": os.path.basename(existing_file) if existing_file else None},
-                "nodes": payload_nodes,
-                "outputs": {"mesh": {"node_id": "1", "output": "mesh"}}
-            }
+            "type": "workflow",
+            "name": "modly_placeholder_workflow",
+            "nodes": payload_nodes,
+            "outputs": {"mesh": {"node_id": "1", "output": "mesh"}},
+            "meta": {"text_prompt": text_prompt, "existing_file": os.path.basename(existing_file) if existing_file else None}
         }
         print("[generator] No workflow file provided; using internal placeholder payload. Replace with exported workflow.json for real results.")
 
-    # Attach text_prompt into the payload if present
+    # Attach text_prompt into the payload if present (some workflows look in meta.prompt or meta.text_prompt)
     if text_prompt:
-        # Many ComfyUI workflows expect the prompt in a specific node or field — adapt as needed.
-        workflow_payload.setdefault('prompt', {}).setdefault('meta', {})['text_prompt'] = text_prompt
+        workflow_payload.setdefault('meta', {})['text_prompt'] = text_prompt
 
     # Send the workflow
     try:
@@ -226,7 +242,9 @@ def generate(inputs, output_dir):
     # Attempt to find an output mesh URL/path in result_info
     if result_info:
         # Heuristic checks for common output locations — adapt to your ComfyUI's response structure
-        outputs = result_info.get("outputs") or result_info.get("result") or {}
+        outputs = None
+        if isinstance(result_info, dict):
+            outputs = result_info.get("outputs") or result_info.get("result") or result_info.get("outputs_list")
         mesh_url = None
         if isinstance(outputs, dict):
             # Search for a URL value in outputs
@@ -237,6 +255,13 @@ def generate(inputs, output_dir):
                 if isinstance(v, dict) and 'url' in v and isinstance(v['url'], str) and v['url'].lower().endswith(('.obj', '.gltf', '.glb')):
                     mesh_url = v['url']
                     break
+        elif isinstance(outputs, list):
+            for item in outputs:
+                if isinstance(item, dict):
+                    url = item.get('url') or item.get('file') or item.get('path')
+                    if isinstance(url, str) and url.lower().endswith(('.obj', '.gltf', '.glb')):
+                        mesh_url = url
+                        break
         # If we found a URL, try to download
         if mesh_url:
             try:
@@ -270,9 +295,6 @@ def generate(inputs, output_dir):
                 pass
         blend_path = None
 
-    # If the user provided an existing .blend and asked for edits, we didn't implement automatic edit
-    # via Blender scripting here — you can provide a workflow_json and a Blender script to make edits.
-
     result = {"output_mesh": mesh_path}
     if blend_path:
         result["output_blend"] = blend_path
@@ -280,7 +302,6 @@ def generate(inputs, output_dir):
     return result
 
 
-# Some Modly installations expect a Generator class exported from generator.py
 # Provide a thin wrapper class named `Generator` that implements a generate(inputs, output_dir) method.
 class Generator:
     def __init__(self):
