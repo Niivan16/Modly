@@ -1,0 +1,31 @@
+{
+  "name": "ComfyUI 3D Generator",
+  "version": "1.0.0",
+  "description": "Generates 3D meshes using a local ComfyUI API backend.",
+  "type": "model",
+  "author": "Niivan16",
+  "inputs": [
+    {
+      "name": "input_image",
+      "type": "image",
+      "label": "Source Image",
+      "required": true
+    },
+    {
+      "name": "workflow_json",
+      "type": "file",
+      "label": "ComfyUI workflow (optional)",
+      "required": false,
+      "help": "Optional: a ComfyUI workflow exported in 'API format' (JSON). If not provided, generator.py will use the internal placeholder workflow."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "output_mesh",
+      "type": "mesh",
+      "label": "Generated 3D Mesh"
+    }
+  ],
+  "homepage": "https://github.com/Niivan16/Modly",
+  "license": "MIT"
+}
