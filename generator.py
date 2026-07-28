@@ -35,7 +35,7 @@ def _upload_file(comfy_url, path, field_name="image"):
     print(f"[generator] Uploading {path} to ComfyUI at {comfy_url} ...")
     with open(path, "rb") as f:
         files = {field_name: (os.path.basename(path), f)}
-        resp = requests.post(f"{comfy_url.rstrip('/')}/upload/image", files=files)
+        resp = requests.post(f"{comfyui_url.rstrip('/')}/upload/image", files=files)
     resp.raise_for_status()
     try:
         return resp.json()
@@ -61,7 +61,7 @@ def _poll_for_result(comfy_url, queue_info, timeout_seconds=MAX_WAIT_SECONDS):
             qid = queue_info.get("id") or queue_info.get("prompt_id") or queue_info.get("queue_id")
             if qid:
                 try:
-                    resp = requests.get(f"{comfy_url.rstrip('/')}/queue/{qid}", timeout=10)
+                    resp = requests.get(f"{comfyurl.rstrip('/')}/queue/{qid}", timeout=10)
                     if resp.status_code == 200:
                         rj = resp.json()
                         if rj.get("status") in ("done", "completed", "complete") or rj.get("finished", False):
@@ -278,6 +278,16 @@ def generate(inputs, output_dir):
         result["output_blend"] = blend_path
 
     return result
+
+
+# Some Modly installations expect a Generator class exported from generator.py
+# Provide a thin wrapper class named `Generator` that implements a generate(inputs, output_dir) method.
+class Generator:
+    def __init__(self):
+        pass
+
+    def generate(self, inputs, output_dir):
+        return generate(inputs, output_dir)
 
 
 if __name__ == "__main__":
