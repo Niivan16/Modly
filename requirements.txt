@@ -1,2 +1,4 @@
 requests==2.31.0
-# Add any other libs you need (e.g., numpy, pillow) if your workflow requires them
+# If you want OBJ/GLTF handling libraries on the Modly side, add them here (e.g., trimesh, pygltflib)
+# Note: To produce .blend files this script calls the system 'blender' CLI. Blender (not pip) must be
+# installed and available in PATH in the environment where Modly runs this generator.

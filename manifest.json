@@ -1,7 +1,7 @@
 {
-  "name": "ComfyUI 3D Generator",
-  "version": "1.0.0",
-  "description": "Generates 3D meshes using a local ComfyUI API backend.",
+  "name": "ComfyUI 3D Generator (Blender-ready)",
+  "version": "1.1.0",
+  "description": "Generates and edits 3D assets using a local ComfyUI API backend and optionally saves .blend files via Blender CLI.",
   "type": "model",
   "author": "Niivan16",
   "inputs": [
@@ -9,7 +9,21 @@
       "name": "input_image",
       "type": "image",
       "label": "Source Image",
-      "required": true
+      "required": false
+    },
+    {
+      "name": "text_prompt",
+      "type": "string",
+      "label": "Text Prompt",
+      "required": false,
+      "help": "Describe what to generate or edit (used in the AI workflow)."
+    },
+    {
+      "name": "existing_file",
+      "type": "file",
+      "label": "Existing 3D file (optional)",
+      "required": false,
+      "help": "Provide an existing .obj/.gltf/.blend file to edit. If provided, the generator will attempt to edit this file instead of generating from scratch."
     },
     {
       "name": "workflow_json",
@@ -24,6 +38,11 @@
       "name": "output_mesh",
       "type": "mesh",
       "label": "Generated 3D Mesh"
+    },
+    {
+      "name": "output_blend",
+      "type": "file",
+      "label": "Blender .blend file (if generated)"
     }
   ],
   "homepage": "https://github.com/Niivan16/Modly",
