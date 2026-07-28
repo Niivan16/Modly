@@ -1,4 +1,6 @@
 {
+  "id": "niivan16.modly.comfyui",
+  "manifest_version": "1",
   "name": "ComfyUI 3D Generator (Blender-ready)",
   "version": "1.1.0",
   "description": "Generates and edits 3D assets using a local ComfyUI API backend and optionally saves .blend files via Blender CLI.",
